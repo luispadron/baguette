@@ -187,6 +187,7 @@ baguette <command> [options]
   # Web UI — single-device dashboard + multi-device farm + Camera card +
   # Accessibility inspector + Logs panel + in-browser recording.
   serve [--port 8421] [--host 127.0.0.1] [--device-set <path>]
+        [--allowed-hosts <host>]
 
   # DeviceKit chrome / bezel data
   chrome layout    --udid <UDID> | --device-name "iPhone 17 Pro"
@@ -243,6 +244,18 @@ The HTML is editable on disk — `Sources/Baguette/Resources/Web/sim.html`
 opens directly in any browser via `file://` (preview mode), and points
 to its sibling `.js` files. Set `BAGUETTE_WEB_DIR` to override the
 served root for live-iteration without rebuilding.
+
+By default the server only trusts loopback `Host` / `Origin` values, so
+requests arriving through a reverse proxy get `403 forbidden origin`.
+Pass the proxy's public hostname to trust it:
+
+```bash
+baguette serve --allowed-hosts sim.example.com    # exact host
+baguette serve --allowed-hosts '*.example.com'    # any subdomain
+```
+
+The flag is repeatable. Ports are ignored for allowed hosts, and
+cross-site `Origin`s are still rejected.
 
 ### Routes (single resource tree, no `/api/` prefix)
 

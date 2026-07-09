@@ -60,6 +60,63 @@ struct ServerSecurityTests {
         ))
     }
 
+    @Test func `allows proxied requests whose Host names an allowed host`() {
+        let request = Self.request(host: "sim.example.test")
+
+        #expect(Server.isTrustedBrowserRequest(
+            request, bindHost: "127.0.0.1", bindPort: 8421,
+            allowedHosts: ["sim.example.test"]
+        ))
+    }
+
+    @Test func `allows browser origins on an allowed host regardless of port`() {
+        let request = Self.request(
+            host: "sim.example.test",
+            origin: "https://sim.example.test"
+        )
+
+        #expect(Server.isTrustedBrowserRequest(
+            request, bindHost: "127.0.0.1", bindPort: 8421,
+            allowedHosts: ["sim.example.test"]
+        ))
+    }
+
+    @Test func `matches wildcard allowed hosts against subdomains`() {
+        let request = Self.request(
+            host: "device-1.sim.example.test",
+            origin: "https://device-1.sim.example.test"
+        )
+
+        #expect(Server.isTrustedBrowserRequest(
+            request, bindHost: "127.0.0.1", bindPort: 8421,
+            allowedHosts: ["*.example.test"]
+        ))
+    }
+
+    @Test func `still rejects hosts outside the allowed list`() {
+        let request = Self.request(
+            host: "attacker.test:8421",
+            origin: "http://attacker.test:8421"
+        )
+
+        #expect(!Server.isTrustedBrowserRequest(
+            request, bindHost: "127.0.0.1", bindPort: 8421,
+            allowedHosts: ["sim.example.test"]
+        ))
+    }
+
+    @Test func `rejects allowed-host requests with a foreign Origin`() {
+        let request = Self.request(
+            host: "sim.example.test",
+            origin: "https://attacker.test"
+        )
+
+        #expect(!Server.isTrustedBrowserRequest(
+            request, bindHost: "127.0.0.1", bindPort: 8421,
+            allowedHosts: ["sim.example.test"]
+        ))
+    }
+
     @Test func `static asset responses deny foreign framing`() {
         let csp = HTTPField.Name("Content-Security-Policy")!
 

@@ -37,17 +37,20 @@ struct Server: Sendable {
     let chromes: any Chromes
     let host: String
     let port: Int
+    let allowedHosts: Set<String>
 
     init(
         simulators: any Simulators,
         chromes: any Chromes,
         host: String = "127.0.0.1",
-        port: Int = 8421
+        port: Int = 8421,
+        allowedHosts: [String] = []
     ) {
         self.simulators = simulators
         self.chromes = chromes
         self.host = host
         self.port = port
+        self.allowedHosts = Set(allowedHosts.map { $0.lowercased() })
     }
 
     func run() async throws {
@@ -74,16 +77,17 @@ struct Server: Sendable {
     private func registerRoutes(on router: Router<BasicWebSocketRequestContext>) {
         let bindHost = self.host
         let bindPort = self.port
+        let allowedHosts = self.allowedHosts
         let rejectUntrustedBrowser: @Sendable (Request) -> Response? = { request in
             Self.rejectUntrustedBrowserRequest(
-                request, bindHost: bindHost, bindPort: bindPort
+                request, bindHost: bindHost, bindPort: bindPort, allowedHosts: allowedHosts
             )
         }
         let trustedWebSocketUpgrade:
             @Sendable (Request, BasicWebSocketRequestContext) async throws -> RouterShouldUpgrade = {
                 request, _ in
                 Self.isTrustedBrowserRequest(
-                    request, bindHost: bindHost, bindPort: bindPort
+                    request, bindHost: bindHost, bindPort: bindPort, allowedHosts: allowedHosts
                 ) ? .upgrade([:]) : .dontUpgrade
             }
 
@@ -1128,11 +1132,12 @@ struct Server: Sendable {
         let simulators = self.simulators
         let bindHost = self.host
         let bindPort = self.port
+        let allowedHosts = self.allowedHosts
         let trustedWebSocketUpgrade:
             @Sendable (Request, BasicWebSocketRequestContext) async throws -> RouterShouldUpgrade = {
                 request, _ in
                 Self.isTrustedBrowserRequest(
-                    request, bindHost: bindHost, bindPort: bindPort
+                    request, bindHost: bindHost, bindPort: bindPort, allowedHosts: allowedHosts
                 ) ? .upgrade([:]) : .dontUpgrade
             }
         router.ws(
@@ -1297,11 +1302,12 @@ struct Server: Sendable {
         let simulators = self.simulators
         let bindHost = self.host
         let bindPort = self.port
+        let allowedHosts = self.allowedHosts
         let trustedWebSocketUpgrade:
             @Sendable (Request, BasicWebSocketRequestContext) async throws -> RouterShouldUpgrade = {
                 request, _ in
                 Self.isTrustedBrowserRequest(
-                    request, bindHost: bindHost, bindPort: bindPort
+                    request, bindHost: bindHost, bindPort: bindPort, allowedHosts: allowedHosts
                 ) ? .upgrade([:]) : .dontUpgrade
             }
         router.ws(
@@ -1528,9 +1534,12 @@ struct Server: Sendable {
     private static func rejectUntrustedBrowserRequest(
         _ request: Request,
         bindHost: String,
-        bindPort: Int
+        bindPort: Int,
+        allowedHosts: Set<String> = []
     ) -> Response? {
-        guard !isTrustedBrowserRequest(request, bindHost: bindHost, bindPort: bindPort) else {
+        guard !isTrustedBrowserRequest(
+            request, bindHost: bindHost, bindPort: bindPort, allowedHosts: allowedHosts
+        ) else {
             return nil
         }
         return errorJSON("forbidden origin", status: .forbidden)
@@ -1539,15 +1548,21 @@ struct Server: Sendable {
     /// Browsers can drive localhost services from another site unless the
     /// service checks `Origin`. For a loopback bind, also reject DNS-rebind
     /// style `Host` values that are not loopback names.
+    ///
+    /// Hosts in `allowedHosts` (exact or `*.suffix`) are trusted as
+    /// request / origin authorities regardless of port, for serving
+    /// behind a reverse proxy.
     static func isTrustedBrowserRequest(
         _ request: Request,
         bindHost: String,
-        bindPort: Int
+        bindPort: Int,
+        allowedHosts: Set<String> = []
     ) -> Bool {
         if isLoopbackBind(bindHost),
            let authority = request.head.authority,
            let requestHost = parseAuthority(authority)?.host,
-           !isLoopbackHost(requestHost) {
+           !isLoopbackHost(requestHost),
+           !isAllowedHost(requestHost, allowedHosts) {
             return false
         }
 
@@ -1564,6 +1579,11 @@ struct Server: Sendable {
 
         let authority = request.head.authority ?? "\(bindHost):\(bindPort)"
         guard let requestAuthority = parseAuthority(authority) else { return false }
+
+        if isAllowedHost(originHost, allowedHosts) {
+            return originHost.caseInsensitiveCompare(requestAuthority.host) == .orderedSame
+        }
+
         let requestPort = requestAuthority.port ?? bindPort
         let originPort = originURL.port ?? defaultPort(for: originURL.scheme)
 
@@ -1575,6 +1595,15 @@ struct Server: Sendable {
 
         return originHost.caseInsensitiveCompare(requestAuthority.host) == .orderedSame
             && (originPort ?? requestPort) == requestPort
+    }
+
+    private static func isAllowedHost(_ host: String, _ allowedHosts: Set<String>) -> Bool {
+        let lower = host.lowercased()
+        if allowedHosts.contains(lower) { return true }
+        return allowedHosts.contains {
+            let pattern = $0.lowercased()
+            return pattern.hasPrefix("*.") && lower.hasSuffix(pattern.dropFirst())
+        }
     }
 
     private static func parseAuthority(_ raw: String) -> (host: String, port: Int?)? {
